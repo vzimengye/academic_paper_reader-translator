@@ -32,6 +32,17 @@ type TranslationUnit = {
   text: string;
 };
 
+type EditableTextProps = {
+  as?: "p" | "h1" | "h2" | "h3" | "figcaption";
+  className?: string;
+  id?: string;
+  text: string;
+  item?: TranslationItem;
+  editable: boolean;
+  highlight?: boolean;
+  onCommit: (text: string) => void;
+};
+
 type AuthUser = {
   id: string;
   email: string;
@@ -407,6 +418,50 @@ function renderTermsOnly(text: string, item?: TranslationItem) {
   );
 }
 
+function EditableText({
+  as = "p",
+  className,
+  id,
+  text,
+  item,
+  editable,
+  highlight = false,
+  onCommit
+}: EditableTextProps) {
+  const Tag = as;
+  const pieces = highlight ? renderWithTerms(text, item) : renderTermsOnly(text, item);
+
+  if (editable) {
+    return (
+      <Tag
+        className={`${className ?? ""} editable-text`}
+        id={id}
+        contentEditable
+        suppressContentEditableWarning
+        onBlur={(event) => onCommit(event.currentTarget.innerText.trim())}
+      >
+        {text}
+      </Tag>
+    );
+  }
+
+  return (
+    <Tag className={className} id={id}>
+      {pieces.map((piece, index) =>
+        piece.term ? (
+          <span className="term" data-tip={piece.term.explanation} key={`${id ?? "text"}-${index}`}>
+            {piece.text}
+          </span>
+        ) : piece.mark ? (
+          <mark key={`${id ?? "text"}-${index}`}>{piece.text}</mark>
+        ) : (
+          <span key={`${id ?? "text"}-${index}`}>{piece.text}</span>
+        )
+      )}
+    </Tag>
+  );
+}
+
 async function extractPdf(file: File): Promise<{ pages: RenderedPage[]; fullText: string }> {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
@@ -719,6 +774,7 @@ export default function Home() {
   const [authPassword, setAuthPassword] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const [editMode, setEditMode] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const translationCacheRef = useRef(new Map<string, TranslationItem>());
 
@@ -795,6 +851,17 @@ export default function Home() {
       body: JSON.stringify(payload)
     });
     if (response.ok) await refreshDocuments();
+  }
+
+  function updateTranslatedText(id: string, text: string) {
+    if (!text) return;
+    setTranslation((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        items: current.items.map((item) => (item.id === id ? { ...item, translatedText: text } : item))
+      };
+    });
   }
 
   async function handleFile(file: File) {
@@ -891,6 +958,9 @@ export default function Home() {
           </button>
           <button type="button" className="ghost" disabled={!translation} onClick={() => window.print()}>
             打印 / 导出
+          </button>
+          <button type="button" className="ghost" disabled={!translation} onClick={() => setEditMode((enabled) => !enabled)}>
+            {editMode ? "完成编辑" : "编辑译文"}
           </button>
         </div>
       </header>
@@ -1025,71 +1095,53 @@ export default function Home() {
                       return (
                         <figure className="visual-block" key={paragraph.id}>
                           {paragraph.imageUrl && <img src={paragraph.imageUrl} alt={paragraph.text} />}
-                          <figcaption>
-                            {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
-                              piece.term ? (
-                                <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
-                                  {piece.text}
-                                </span>
-                              ) : piece.mark ? (
-                                <mark key={`${paragraph.id}-${index}`}>{piece.text}</mark>
-                              ) : (
-                                <span key={`${paragraph.id}-${index}`}>{piece.text}</span>
-                              )
-                            )}
-                          </figcaption>
+                          <EditableText
+                            as="figcaption"
+                            text={item?.translatedText ?? "等待生成中..."}
+                            item={item}
+                            editable={editMode}
+                            onCommit={(text) => updateTranslatedText(paragraph.id, text)}
+                          />
                         </figure>
                       );
                     }
                     if (paragraph.role === "frontMatter") {
                       return (
-                        <p className={`document-paragraph front-matter${item ? "" : " pending"}`} key={paragraph.id}>
-                          {renderTermsOnly(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
-                            piece.term ? (
-                              <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
-                                {piece.text}
-                              </span>
-                            ) : piece.mark ? (
-                              <mark key={`${paragraph.id}-${index}`}>{piece.text}</mark>
-                            ) : (
-                              <span key={`${paragraph.id}-${index}`}>{piece.text}</span>
-                            )
-                          )}
-                        </p>
+                        <EditableText
+                          className={`document-paragraph front-matter${item ? "" : " pending"}`}
+                          key={paragraph.id}
+                          text={item?.translatedText ?? "等待生成中..."}
+                          item={item}
+                          editable={editMode}
+                          onCommit={(text) => updateTranslatedText(paragraph.id, text)}
+                        />
                       );
                     }
                     if (paragraph.role === "title" || paragraph.role === "heading1" || paragraph.role === "heading2") {
                       const HeadingTag = paragraph.role === "title" ? "h1" : paragraph.role === "heading1" ? "h2" : "h3";
                       return (
-                        <HeadingTag className={`translated-heading ${paragraph.role}`} id={`translated-${paragraph.id}`} key={paragraph.id}>
-                          {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
-                            piece.term ? (
-                              <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
-                                {piece.text}
-                              </span>
-                            ) : piece.mark ? (
-                              <mark key={`${paragraph.id}-${index}`}>{piece.text}</mark>
-                            ) : (
-                              <span key={`${paragraph.id}-${index}`}>{piece.text}</span>
-                            )
-                          )}
-                        </HeadingTag>
+                        <EditableText
+                          as={HeadingTag}
+                          className={`translated-heading ${paragraph.role}`}
+                          id={`translated-${paragraph.id}`}
+                          key={paragraph.id}
+                          text={item?.translatedText ?? "等待生成中..."}
+                          item={item}
+                          editable={editMode}
+                          onCommit={(text) => updateTranslatedText(paragraph.id, text)}
+                        />
                       );
                     }
                     return (
-                      <p className={`document-paragraph${item ? "" : " pending"}`} key={paragraph.id}>
-                        {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
-                          piece.term ? (
-                            <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
-                              {piece.text}
-                            </span>
-                          ) : piece.mark ? (
-                            <mark key={`${paragraph.id}-${index}`}>{piece.text}</mark>
-                          ) : (
-                            <span key={`${paragraph.id}-${index}`}>{piece.text}</span>
-                          )
-                        )}
-                      </p>
+                      <EditableText
+                        className={`document-paragraph${item ? "" : " pending"}`}
+                        key={paragraph.id}
+                        text={item?.translatedText ?? "等待生成中..."}
+                        item={item}
+                        editable={editMode}
+                        highlight={paragraph.role === "text" || !paragraph.role}
+                        onCommit={(text) => updateTranslatedText(paragraph.id, text)}
+                      />
                     );
                   })}
                 </section>

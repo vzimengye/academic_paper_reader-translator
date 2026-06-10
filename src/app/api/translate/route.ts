@@ -78,7 +78,10 @@ export async function POST(request: Request) {
         : "Pick one core sentence per paragraph. For short paragraphs, pick the full paragraph.",
       mode === "fast"
         ? "Do not spend time extracting terms in this mode."
-        : "Extract only important professional terms, abbreviations, methods, datasets, metrics, and domain concepts.",
+        : "Extract only genuinely technical or academically difficult terms: field-specific concepts, named methods, datasets, metrics, theories, models, algorithms, statistical/economic terms, abbreviations, and specialized domain phrases.",
+      mode === "fast"
+        ? "Skip terminology filtering."
+        : "Do not extract common non-academic words, generic verbs, ordinary adjectives, broad words like result/method/problem/data, author names, institution names, URLs, citation names, or simple phrases that an undergraduate general reader would already know.",
       mode === "fast"
         ? "Return compact JSON."
         : "Each term explanation must be 1-3 sentences, using as many sentences as needed to be clear and concise, written in the target language."
