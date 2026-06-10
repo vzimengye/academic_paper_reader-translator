@@ -67,7 +67,7 @@ async function extractPdf(file: File): Promise<{ pages: RenderedPage[]; fullText
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1.35 });
+    const viewport = page.getViewport({ scale: 2.2 });
     const textViewport = page.getViewport({ scale: 1 });
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
