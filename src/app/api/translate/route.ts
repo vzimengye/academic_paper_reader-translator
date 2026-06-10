@@ -15,10 +15,18 @@ type ModelItem = {
 };
 
 function cleanJson(raw: string) {
-  return raw
+  const trimmed = raw
     .replace(/^```(?:json)?/i, "")
     .replace(/```$/i, "")
     .trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+
+  if (start >= 0 && end > start) {
+    return trimmed.slice(start, end + 1);
+  }
+
+  return trimmed;
 }
 
 function fallbackTranslate(body: TranslateRequest): TranslationPayload {

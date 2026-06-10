@@ -10,6 +10,8 @@ type RenderedPage = PaperPage & {
   canvasUrl: string;
 };
 
+const TRANSLATION_BATCH_SIZE = 8;
+
 type TextPiece = {
   text: string;
   mark: boolean;
@@ -56,7 +58,7 @@ function renderWithTerms(text: string, item?: TranslationItem) {
 
 async function extractPdf(file: File): Promise<{ pages: RenderedPage[]; fullText: string }> {
   const pdfjs = await import("pdfjs-dist");
-  pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+  pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjs.getDocument({ data: buffer }).promise;
@@ -141,6 +143,43 @@ async function extractPdf(file: File): Promise<{ pages: RenderedPage[]; fullText
   return { pages, fullText: allText.join("\n\n") };
 }
 
+async function translateInBatches(
+  sourceLanguage: "en" | "zh",
+  paragraphs: Array<Pick<PaperParagraph, "id" | "text">>,
+  onProgress: (done: number, total: number) => void
+) {
+  let payload: TranslationPayload | null = null;
+
+  for (let index = 0; index < paragraphs.length; index += TRANSLATION_BATCH_SIZE) {
+    const batch = paragraphs.slice(index, index + TRANSLATION_BATCH_SIZE);
+    const response = await fetch("/api/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceLanguage, paragraphs: batch })
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `翻译请求失败：${response.status}`);
+    }
+
+    const next = (await response.json()) as TranslationPayload;
+    if (payload) {
+      payload.items = [...payload.items, ...next.items];
+    } else {
+      payload = { sourceLanguage: next.sourceLanguage, targetLanguage: next.targetLanguage, items: next.items };
+    }
+
+    onProgress(Math.min(index + batch.length, paragraphs.length), paragraphs.length);
+  }
+
+  if (!payload) {
+    throw new Error("没有可翻译的段落。");
+  }
+
+  return payload;
+}
+
 export default function Home() {
   const [pages, setPages] = useState<RenderedPage[]>([]);
   const [translation, setTranslation] = useState<TranslationPayload | null>(null);
@@ -164,29 +203,24 @@ export default function Home() {
     try {
       const extracted = await extractPdf(file);
       const sourceLanguage = detectLanguage(extracted.fullText);
+      const extractedParagraphs = extracted.pages.flatMap((page) =>
+        page.paragraphs.map((paragraph) => ({ id: paragraph.id, text: paragraph.text }))
+      );
       setPages(extracted.pages);
       setStatus("translating");
       setMessage(sourceLanguage === "zh" ? "检测到中文论文，正在生成英文版..." : "检测到英文论文，正在生成中文版...");
 
-      const response = await fetch("/api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sourceLanguage,
-          paragraphs: extracted.pages.flatMap((page) =>
-            page.paragraphs.map((paragraph) => ({ id: paragraph.id, text: paragraph.text }))
-          )
-        })
+      const translated = await translateInBatches(sourceLanguage, extractedParagraphs, (done, total) => {
+        setMessage(`正在翻译段落 ${done} / ${total}...`);
       });
 
-      if (!response.ok) throw new Error(await response.text());
-
-      setTranslation((await response.json()) as TranslationPayload);
+      setTranslation(translated);
       setStatus("ready");
       setMessage(sourceLanguage === "zh" ? "英文镜像论文已生成。" : "中文版镜像论文已生成。");
     } catch (error) {
       setStatus("error");
-      setMessage(error instanceof Error ? error.message : "处理 PDF 时发生错误。");
+      const detail = error instanceof Error ? error.message : "处理 PDF 时发生错误。";
+      setMessage(detail === "Failed to fetch" ? "网络请求失败，请刷新后重试；如果 PDF 很大，可以先用较短论文测试。" : detail);
     }
   }
 
