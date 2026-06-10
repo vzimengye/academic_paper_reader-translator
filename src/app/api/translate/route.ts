@@ -63,7 +63,8 @@ export async function POST(request: Request) {
     sourceLanguage: body.sourceLanguage,
     targetLanguage,
     requirements: [
-      "Translate academic paper paragraphs faithfully.",
+      "Translate academic paper paragraphs quickly and faithfully.",
+      "Do not attempt to preserve the original PDF layout; the client will render a clean HTML document.",
       "Keep citations, formulas, symbols, numbers, figure/table references, and bracketed references unchanged.",
       "Return one result for every input paragraph id.",
       "Pick one core sentence per paragraph. For short paragraphs, pick the full paragraph.",
@@ -86,7 +87,7 @@ export async function POST(request: Request) {
         {
           role: "system",
           content:
-            "You are a meticulous bilingual academic translator. Return strict JSON only with shape {items:[{id,translatedText,coreSentence,translatedCoreSentence,terms:[{source,target,explanation}]}]}."
+            "You are a fast, accurate bilingual academic translator. Return strict JSON only with shape {items:[{id,translatedText,coreSentence,translatedCoreSentence,terms:[{source,target,explanation}]}]}."
         },
         {
           role: "user",

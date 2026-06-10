@@ -10,7 +10,7 @@ type RenderedPage = PaperPage & {
   canvasUrl: string;
 };
 
-const TRANSLATION_BATCH_SIZE = 8;
+const TRANSLATION_BATCH_SIZE = 14;
 
 type TextPiece = {
   text: string;
@@ -185,7 +185,7 @@ export default function Home() {
   const [translation, setTranslation] = useState<TranslationPayload | null>(null);
   const [fileName, setFileName] = useState("");
   const [status, setStatus] = useState<Status>("idle");
-  const [message, setMessage] = useState("导入英文或中文 PDF，系统会自动识别方向并生成镜像排版译文。");
+  const [message, setMessage] = useState("导入英文或中文 PDF，系统会快速识别内容并生成新的双语 HTML 文档。");
   const [progress, setProgress] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -223,7 +223,7 @@ export default function Home() {
 
       setStatus("ready");
       setProgress(100);
-      setMessage(sourceLanguage === "zh" ? "英文镜像论文已生成。" : "中文版镜像论文已生成。");
+      setMessage(sourceLanguage === "zh" ? "英文 HTML 文档已生成。" : "中文 HTML 文档已生成。");
     } catch (error) {
       setStatus("error");
       setProgress(0);
@@ -237,7 +237,7 @@ export default function Home() {
       <header className="topbar">
         <div>
           <p className="eyebrow">Academic Paper Reader Translator</p>
-          <h1>双语论文镜像阅读器</h1>
+          <h1>双语论文快速生成器</h1>
         </div>
         <div className="actions">
           <input
@@ -277,66 +277,61 @@ export default function Home() {
       {pages.length === 0 ? (
         <section className="empty-state" onClick={() => fileRef.current?.click()}>
           <div>
-            <p>把 PDF 放进来，左边保留原文页面，右边生成译文页面。</p>
-            <span>核心句会像荧光笔一样标出，专业术语会有下划线和悬浮解释。</span>
+            <p>把 PDF 放进来，左边快速识别原文，右边生成新的 HTML 译文文档。</p>
+            <span>译文按段落顺序实时出现；图表和图片直接使用原 PDF 页面截图。</span>
           </div>
         </section>
       ) : (
         <section className="reader-grid">
           <div className="column-heading">
-            <span>原文档</span>
-            <span>生成文档</span>
+            <span>原文档截图</span>
+            <span>生成 HTML 文档</span>
           </div>
-          {pages.map((page) => (
-            <article className="spread" key={page.pageIndex}>
-              <div className="paper-page source-page" style={{ aspectRatio: `${page.width} / ${page.height}` }}>
-                <img src={page.canvasUrl} alt={`Original page ${page.pageIndex + 1}`} />
-                {page.paragraphs.map((paragraph) => {
-                  const item = translationMap.get(paragraph.id);
-                  const left = (paragraph.box.x / page.width) * 100;
-                  const top = (paragraph.box.y / page.height) * 100;
-                  const width = (paragraph.box.width / page.width) * 100;
-                  const height = (paragraph.box.height / page.height) * 100;
-                  return (
-                    <div
-                      className="source-highlight"
-                      key={paragraph.id}
-                      title={item?.coreSentence}
-                      style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
-                    />
-                  );
-                })}
-              </div>
+          <div className="document-layout">
+            <div className="source-stack">
+              {pages.map((page) => (
+                <div className="paper-page source-page compact" key={page.pageIndex} style={{ aspectRatio: `${page.width} / ${page.height}` }}>
+                  <img src={page.canvasUrl} alt={`Original page ${page.pageIndex + 1}`} />
+                </div>
+              ))}
+            </div>
 
-              <div className="paper-page translated-page" style={{ aspectRatio: `${page.width} / ${page.height}` }}>
-                {page.paragraphs.map((paragraph) => {
-                  const item = translationMap.get(paragraph.id);
-                  const left = (paragraph.box.x / page.width) * 100;
-                  const top = (paragraph.box.y / page.height) * 100;
-                  const width = (paragraph.box.width / page.width) * 100;
-                  return (
-                    <p
-                      className={`translated-paragraph${item ? "" : " pending"}`}
-                      key={paragraph.id}
-                      style={{ left: `${left}%`, top: `${top}%`, width: `${width}%` }}
-                    >
-                      {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
-                        piece.term ? (
-                          <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
-                            {piece.text}
-                          </span>
-                        ) : piece.mark ? (
-                          <mark key={`${paragraph.id}-${index}`}>{piece.text}</mark>
-                        ) : (
-                          <span key={`${paragraph.id}-${index}`}>{piece.text}</span>
-                        )
-                      )}
-                    </p>
-                  );
-                })}
-              </div>
+            <article className="generated-document">
+              <header className="document-title">
+                <p>{translation ? `${translation.sourceLanguage.toUpperCase()} -> ${translation.targetLanguage.toUpperCase()}` : "生成中"}</p>
+                <h2>{fileName.replace(/\.pdf$/i, "") || "Translated Paper"}</h2>
+              </header>
+
+              {pages.map((page) => (
+                <section className="document-section" key={page.pageIndex}>
+                  <h3>Page {page.pageIndex + 1}</h3>
+                  <figure className="page-snapshot">
+                    <img src={page.canvasUrl} alt={`Original visual snapshot for page ${page.pageIndex + 1}`} />
+                    <figcaption>原页截图，用于保留图表、公式和图片参考。</figcaption>
+                  </figure>
+
+                  {page.paragraphs.map((paragraph) => {
+                    const item = translationMap.get(paragraph.id);
+                    return (
+                      <p className={`document-paragraph${item ? "" : " pending"}`} key={paragraph.id}>
+                        {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
+                          piece.term ? (
+                            <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
+                              {piece.text}
+                            </span>
+                          ) : piece.mark ? (
+                            <mark key={`${paragraph.id}-${index}`}>{piece.text}</mark>
+                          ) : (
+                            <span key={`${paragraph.id}-${index}`}>{piece.text}</span>
+                          )
+                        )}
+                      </p>
+                    );
+                  })}
+                </section>
+              ))}
             </article>
-          ))}
+          </div>
         </section>
       )}
 
