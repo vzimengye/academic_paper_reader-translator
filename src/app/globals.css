@@ -314,6 +314,11 @@ h1 {
   display: grid;
   gap: 18px;
   grid-template-columns: 184px minmax(0, 1fr);
+  transition: grid-template-columns 180ms ease;
+}
+
+.reader-workspace.nav-collapsed {
+  grid-template-columns: 54px minmax(0, 1fr);
 }
 
 .doc-nav {
@@ -327,6 +332,36 @@ h1 {
   padding: 12px;
   position: sticky;
   top: 14px;
+}
+
+.nav-toggle {
+  align-items: center;
+  background: #eef4ff;
+  color: #1d4ed8;
+  display: flex;
+  font-size: 12px;
+  justify-content: center;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.nav-content {
+  display: grid;
+  gap: 4px;
+}
+
+.reader-workspace.nav-collapsed .doc-nav {
+  padding: 8px;
+}
+
+.reader-workspace.nav-collapsed .nav-toggle {
+  min-height: 74px;
+  padding: 8px 6px;
+  writing-mode: vertical-rl;
+}
+
+.reader-workspace.nav-collapsed .nav-content {
+  display: none;
 }
 
 .doc-nav strong {
@@ -670,6 +705,19 @@ mark {
   .doc-nav {
     max-height: none;
     position: static;
+  }
+
+  .reader-workspace.nav-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .reader-workspace.nav-collapsed .doc-nav {
+    padding: 8px;
+  }
+
+  .reader-workspace.nav-collapsed .nav-toggle {
+    min-height: auto;
+    writing-mode: horizontal-tb;
   }
 
   .topbar {

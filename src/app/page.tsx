@@ -674,6 +674,7 @@ export default function Home() {
   const [authName, setAuthName] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authMessage, setAuthMessage] = useState("");
+  const [navCollapsed, setNavCollapsed] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const translationCacheRef = useRef(new Map<string, TranslationItem>());
 
@@ -928,18 +929,29 @@ export default function Home() {
             <span>原文档截图</span>
             <span>生成 HTML 文档</span>
           </div>
-          <div className="reader-workspace">
-            <aside className="doc-nav">
-              <strong>导览</strong>
-              {navigationItems.length ? (
-                navigationItems.map((item) => (
-                  <a className={item.role === "heading2" ? "sub" : ""} href={`#translated-${item.id}`} key={item.id}>
-                    {item.text}
-                  </a>
-                ))
-              ) : (
-                <span>正在识别标题...</span>
-              )}
+          <div className={`reader-workspace${navCollapsed ? " nav-collapsed" : ""}`}>
+            <aside className="doc-nav" aria-label="文档导览">
+              <button
+                type="button"
+                className="nav-toggle"
+                aria-expanded={!navCollapsed}
+                onClick={() => setNavCollapsed((collapsed) => !collapsed)}
+                title={navCollapsed ? "展开导览" : "收起导览"}
+              >
+                <span>{navCollapsed ? "展开" : "收起"}</span>
+              </button>
+              <div className="nav-content" aria-hidden={navCollapsed}>
+                <strong>导览</strong>
+                {navigationItems.length ? (
+                  navigationItems.map((item) => (
+                    <a className={item.role === "heading2" ? "sub" : ""} href={`#translated-${item.id}`} key={item.id}>
+                      {item.text}
+                    </a>
+                  ))
+                ) : (
+                  <span>正在识别标题...</span>
+                )}
+              </div>
             </aside>
 
             <div className="aligned-pages">
