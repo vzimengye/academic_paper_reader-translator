@@ -10,12 +10,12 @@ type RenderedPage = PaperPage & {
   canvasUrl: string;
 };
 
-const FAST_CONCURRENCY = 4;
-const ENRICH_CONCURRENCY = 3;
-const FAST_MAX_ITEMS = 30;
-const ENRICH_MAX_ITEMS = 14;
-const FAST_MAX_CHARS = 7600;
-const ENRICH_MAX_CHARS = 4200;
+const FAST_CONCURRENCY = 2;
+const ENRICH_CONCURRENCY = 1;
+const FAST_MAX_ITEMS = 22;
+const ENRICH_MAX_ITEMS = 10;
+const FAST_MAX_CHARS = 5600;
+const ENRICH_MAX_CHARS = 3200;
 
 type TextPiece = {
   text: string;
@@ -31,6 +31,14 @@ type TranslationUnit = {
   pageIndex: number;
   text: string;
 };
+
+function targetLanguageOf(sourceLanguage: "en" | "zh") {
+  return sourceLanguage === "zh" ? "en" : "zh";
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 function sentencePieces(text: string, highlight?: string): TextPiece[] {
   if (!highlight) return [{ text, mark: false }];
@@ -284,6 +292,57 @@ async function requestTranslationBatch(
   return (await response.json()) as TranslationPayload;
 }
 
+async function requestTranslationBatchWithRecovery(
+  sourceLanguage: "en" | "zh",
+  batch: TranslationUnit[],
+  mode: TranslationMode
+): Promise<TranslationPayload> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await requestTranslationBatch(sourceLanguage, batch, mode);
+    } catch (error) {
+      await wait(650 * (attempt + 1));
+    }
+  }
+
+  if (batch.length > 1) {
+    const midpoint = Math.ceil(batch.length / 2);
+    const [left, right] = await Promise.all([
+      requestTranslationBatchWithRecovery(sourceLanguage, batch.slice(0, midpoint), mode),
+      requestTranslationBatchWithRecovery(sourceLanguage, batch.slice(midpoint), mode)
+    ]);
+
+    return {
+      sourceLanguage,
+      targetLanguage: targetLanguageOf(sourceLanguage),
+      items: [...left.items, ...right.items]
+    };
+  }
+
+  const unit = batch[0];
+  if (mode === "enrich") {
+    return {
+      sourceLanguage,
+      targetLanguage: targetLanguageOf(sourceLanguage),
+      items: []
+    };
+  }
+
+  return {
+    sourceLanguage,
+    targetLanguage: targetLanguageOf(sourceLanguage),
+    items: [
+      {
+        id: unit.id,
+        translatedText: targetLanguageOf(sourceLanguage) === "zh" ? "该段暂时翻译失败，请稍后重试。" : "This paragraph could not be translated yet. Please retry later.",
+        coreSentence: "",
+        translatedCoreSentence: "",
+        terms: []
+      }
+    ]
+  };
+}
+
 async function translateUnits(
   sourceLanguage: "en" | "zh",
   units: TranslationUnit[],
@@ -315,7 +374,7 @@ async function translateUnits(
     while (cursor < batches.length) {
       const batch = batches[cursor];
       cursor += 1;
-      const payload = await requestTranslationBatch(sourceLanguage, batch, mode);
+      const payload = await requestTranslationBatchWithRecovery(sourceLanguage, batch, mode);
       const byId = new Map(payload.items.map((item) => [item.id, item]));
 
       batch.forEach((unit) => {
@@ -382,7 +441,7 @@ export default function Home() {
       setStatus("translating");
       setProgress(32);
       setMessage(sourceLanguage === "zh" ? "检测到中文论文，正在快速生成英文正文..." : "检测到英文论文，正在快速生成中文正文...");
-      setTranslation({ sourceLanguage, targetLanguage: sourceLanguage === "zh" ? "en" : "zh", items: [] });
+      setTranslation({ sourceLanguage, targetLanguage: targetLanguageOf(sourceLanguage), items: [] });
 
       await translateUnits(sourceLanguage, units, "fast", translationCacheRef.current, (partial, done, total) => {
         partial.forEach((item, id) => {
@@ -396,14 +455,18 @@ export default function Home() {
       setMessage("正文已生成，正在补充核心句和专业名词解释...");
       setProgress(82);
 
-      await translateUnits(sourceLanguage, units, "enrich", translationCacheRef.current, (partial, done, total) => {
-        partial.forEach((item, id) => {
-          unitItems.set(id, mergeTranslationItem(unitItems.get(id), item, true));
+      try {
+        await translateUnits(sourceLanguage, units, "enrich", translationCacheRef.current, (partial, done, total) => {
+          partial.forEach((item, id) => {
+            unitItems.set(id, mergeTranslationItem(unitItems.get(id), item, true));
+          });
+          publish();
+          setProgress(82 + Math.round((done / total) * 17));
+          setMessage(`正在补充术语解释 ${done} / ${total} 组内容...`);
         });
-        publish();
-        setProgress(82 + Math.round((done / total) * 17));
-        setMessage(`正在补充术语解释 ${done} / ${total} 组内容...`);
-      });
+      } catch {
+        setMessage("正文已生成，部分核心句或专业名词解释暂时未补全。");
+      }
 
       setStatus("ready");
       setProgress(100);
