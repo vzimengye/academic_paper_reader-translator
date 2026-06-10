@@ -74,7 +74,6 @@ export async function POST(request: Request) {
     body: JSON.stringify({
       model: MODEL,
       temperature: 0.2,
-      response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
