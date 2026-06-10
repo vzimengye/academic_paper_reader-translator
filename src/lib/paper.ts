@@ -43,6 +43,7 @@ export type TranslationPayload = {
 
 export type TranslateRequest = {
   sourceLanguage: PaperLanguage;
+  mode?: "fast" | "enrich";
   paragraphs: Pick<PaperParagraph, "id" | "text">[];
 };
 

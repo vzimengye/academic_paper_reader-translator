@@ -10,12 +10,26 @@ type RenderedPage = PaperPage & {
   canvasUrl: string;
 };
 
-const TRANSLATION_BATCH_SIZE = 14;
+const FAST_CONCURRENCY = 4;
+const ENRICH_CONCURRENCY = 3;
+const FAST_MAX_ITEMS = 30;
+const ENRICH_MAX_ITEMS = 14;
+const FAST_MAX_CHARS = 7600;
+const ENRICH_MAX_CHARS = 4200;
 
 type TextPiece = {
   text: string;
   mark: boolean;
   term?: TranslationItem["terms"][number];
+};
+
+type TranslationMode = "fast" | "enrich";
+
+type TranslationUnit = {
+  id: string;
+  ids: string[];
+  pageIndex: number;
+  text: string;
 };
 
 function sentencePieces(text: string, highlight?: string): TextPiece[] {
@@ -143,41 +157,188 @@ async function extractPdf(file: File): Promise<{ pages: RenderedPage[]; fullText
   return { pages, fullText: allText.join("\n\n") };
 }
 
-async function translateInBatches(
-  sourceLanguage: "en" | "zh",
-  paragraphs: Array<Pick<PaperParagraph, "id" | "text">>,
-  onBatch: (payload: TranslationPayload, done: number, total: number) => void
-) {
-  let payload: TranslationPayload | null = null;
+function shouldMergeWithNext(text: string) {
+  const trimmed = text.trim();
+  if (trimmed.length < 72) return true;
+  if (trimmed.length < 140 && !/[.!?。！？:：]$/.test(trimmed)) return true;
+  return false;
+}
 
-  for (let index = 0; index < paragraphs.length; index += TRANSLATION_BATCH_SIZE) {
-    const batch = paragraphs.slice(index, index + TRANSLATION_BATCH_SIZE);
-    const response = await fetch("/api/translate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sourceLanguage, paragraphs: batch })
+function buildTranslationUnits(pages: RenderedPage[]): TranslationUnit[] {
+  const units: TranslationUnit[] = [];
+
+  pages.forEach((page) => {
+    let current: TranslationUnit | null = null;
+
+    const flush = () => {
+      if (!current) return;
+      units.push(current);
+      current = null;
+    };
+
+    page.paragraphs.forEach((paragraph) => {
+      const canMerge = current !== null && current.text.length + paragraph.text.length < 520;
+
+      if (current && canMerge && shouldMergeWithNext(current.text)) {
+        current.ids.push(paragraph.id);
+        current.id = current.ids.join("__");
+        current.text = `${current.text}\n${paragraph.text}`;
+        return;
+      }
+
+      flush();
+      current = {
+        id: paragraph.id,
+        ids: [paragraph.id],
+        pageIndex: paragraph.pageIndex,
+        text: paragraph.text
+      };
     });
 
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(detail || `翻译请求失败：${response.status}`);
-    }
+    flush();
+  });
 
-    const next = (await response.json()) as TranslationPayload;
-    if (payload) {
-      payload.items = [...payload.items, ...next.items];
+  return units;
+}
+
+function makeBatches(units: TranslationUnit[], mode: TranslationMode) {
+  const maxItems = mode === "fast" ? FAST_MAX_ITEMS : ENRICH_MAX_ITEMS;
+  const maxChars = mode === "fast" ? FAST_MAX_CHARS : ENRICH_MAX_CHARS;
+  const batches: TranslationUnit[][] = [];
+  let current: TranslationUnit[] = [];
+  let charCount = 0;
+
+  const flush = () => {
+    if (!current.length) return;
+    batches.push(current);
+    current = [];
+    charCount = 0;
+  };
+
+  units.forEach((unit) => {
+    const nextChars = charCount + unit.text.length;
+    if (current.length && (current.length >= maxItems || nextChars > maxChars)) {
+      flush();
+    }
+    current.push(unit);
+    charCount += unit.text.length;
+  });
+
+  flush();
+  return batches;
+}
+
+function expandUnitItems(units: TranslationUnit[], items: Map<string, TranslationItem>) {
+  const expanded: TranslationItem[] = [];
+
+  units.forEach((unit) => {
+    const item = items.get(unit.id);
+    if (!item) return;
+
+    expanded.push({ ...item, id: unit.ids[0] });
+    unit.ids.slice(1).forEach((id) => {
+      expanded.push({
+        ...item,
+        id,
+        translatedText: "",
+        coreSentence: "",
+        translatedCoreSentence: "",
+        terms: []
+      });
+    });
+  });
+
+  return expanded;
+}
+
+function mergeTranslationItem(previous: TranslationItem | undefined, next: TranslationItem, preferPreviousText = false): TranslationItem {
+  return {
+    id: next.id,
+    translatedText: preferPreviousText ? previous?.translatedText || next.translatedText || "" : next.translatedText || previous?.translatedText || "",
+    coreSentence: next.coreSentence || previous?.coreSentence || "",
+    translatedCoreSentence: next.translatedCoreSentence || previous?.translatedCoreSentence || next.translatedText || "",
+    terms: next.terms?.length ? next.terms : previous?.terms ?? []
+  };
+}
+
+async function requestTranslationBatch(
+  sourceLanguage: "en" | "zh",
+  batch: TranslationUnit[],
+  mode: TranslationMode
+) {
+  const response = await fetch("/api/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sourceLanguage,
+      mode,
+      paragraphs: batch.map((unit) => ({ id: unit.id, text: unit.text }))
+    })
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `翻译请求失败：${response.status}`);
+  }
+
+  return (await response.json()) as TranslationPayload;
+}
+
+async function translateUnits(
+  sourceLanguage: "en" | "zh",
+  units: TranslationUnit[],
+  mode: TranslationMode,
+  cache: Map<string, TranslationItem>,
+  onBatch: (items: Map<string, TranslationItem>, done: number, total: number) => void
+) {
+  const items = new Map<string, TranslationItem>();
+  const pending: TranslationUnit[] = [];
+  let done = 0;
+
+  units.forEach((unit) => {
+    const cached = cache.get(`${sourceLanguage}:${mode}:${unit.text}`);
+    if (cached) {
+      items.set(unit.id, cached);
+      done += 1;
     } else {
-      payload = { sourceLanguage: next.sourceLanguage, targetLanguage: next.targetLanguage, items: next.items };
+      pending.push(unit);
     }
+  });
 
-    onBatch(payload, Math.min(index + batch.length, paragraphs.length), paragraphs.length);
+  if (done) onBatch(items, done, units.length);
+
+  const batches = makeBatches(pending, mode);
+  let cursor = 0;
+  const concurrency = Math.min(mode === "fast" ? FAST_CONCURRENCY : ENRICH_CONCURRENCY, batches.length || 1);
+
+  async function worker() {
+    while (cursor < batches.length) {
+      const batch = batches[cursor];
+      cursor += 1;
+      const payload = await requestTranslationBatch(sourceLanguage, batch, mode);
+      const byId = new Map(payload.items.map((item) => [item.id, item]));
+
+      batch.forEach((unit) => {
+        const previous = items.get(unit.id);
+        const raw = byId.get(unit.id);
+        const merged = mergeTranslationItem(previous, {
+          id: unit.id,
+          translatedText: raw?.translatedText ?? "",
+          coreSentence: raw?.coreSentence ?? "",
+          translatedCoreSentence: raw?.translatedCoreSentence ?? "",
+          terms: raw?.terms ?? []
+        });
+        items.set(unit.id, merged);
+        cache.set(`${sourceLanguage}:${mode}:${unit.text}`, merged);
+      });
+
+      done += batch.length;
+      onBatch(items, Math.min(done, units.length), units.length);
+    }
   }
 
-  if (!payload) {
-    throw new Error("没有可翻译的段落。");
-  }
-
-  return payload;
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return items;
 }
 
 export default function Home() {
@@ -188,6 +349,7 @@ export default function Home() {
   const [message, setMessage] = useState("导入英文或中文 PDF，系统会快速识别内容并生成新的双语 HTML 文档。");
   const [progress, setProgress] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
+  const translationCacheRef = useRef(new Map<string, TranslationItem>());
 
   const translationMap = useMemo(() => {
     return new Map((translation?.items ?? []).map((item) => [item.id, item]));
@@ -206,19 +368,41 @@ export default function Home() {
       const extracted = await extractPdf(file);
       setProgress(28);
       const sourceLanguage = detectLanguage(extracted.fullText);
-      const extractedParagraphs = extracted.pages.flatMap((page) =>
-        page.paragraphs.map((paragraph) => ({ id: paragraph.id, text: paragraph.text }))
-      );
+      const units = buildTranslationUnits(extracted.pages);
+      const unitItems = new Map<string, TranslationItem>();
+      const publish = () => {
+        setTranslation({
+          sourceLanguage,
+          targetLanguage: sourceLanguage === "zh" ? "en" : "zh",
+          items: expandUnitItems(units, unitItems)
+        });
+      };
+
       setPages(extracted.pages);
       setStatus("translating");
       setProgress(32);
-      setMessage(sourceLanguage === "zh" ? "检测到中文论文，正在生成英文版..." : "检测到英文论文，正在生成中文版...");
+      setMessage(sourceLanguage === "zh" ? "检测到中文论文，正在快速生成英文正文..." : "检测到英文论文，正在快速生成中文正文...");
       setTranslation({ sourceLanguage, targetLanguage: sourceLanguage === "zh" ? "en" : "zh", items: [] });
 
-      await translateInBatches(sourceLanguage, extractedParagraphs, (partial, done, total) => {
-        setTranslation({ ...partial, items: [...partial.items] });
-        setProgress(32 + Math.round((done / total) * 66));
-        setMessage(`正在翻译段落 ${done} / ${total}...`);
+      await translateUnits(sourceLanguage, units, "fast", translationCacheRef.current, (partial, done, total) => {
+        partial.forEach((item, id) => {
+          unitItems.set(id, mergeTranslationItem(unitItems.get(id), item));
+        });
+        publish();
+        setProgress(32 + Math.round((done / total) * 48));
+        setMessage(`正在快速翻译 ${done} / ${total} 组内容...`);
+      });
+
+      setMessage("正文已生成，正在补充核心句和专业名词解释...");
+      setProgress(82);
+
+      await translateUnits(sourceLanguage, units, "enrich", translationCacheRef.current, (partial, done, total) => {
+        partial.forEach((item, id) => {
+          unitItems.set(id, mergeTranslationItem(unitItems.get(id), item, true));
+        });
+        publish();
+        setProgress(82 + Math.round((done / total) * 17));
+        setMessage(`正在补充术语解释 ${done} / ${total} 组内容...`);
       });
 
       setStatus("ready");
@@ -287,31 +471,28 @@ export default function Home() {
             <span>原文档截图</span>
             <span>生成 HTML 文档</span>
           </div>
-          <div className="document-layout">
-            <div className="source-stack">
-              {pages.map((page) => (
-                <div className="paper-page source-page compact" key={page.pageIndex} style={{ aspectRatio: `${page.width} / ${page.height}` }}>
-                  <img src={page.canvasUrl} alt={`Original page ${page.pageIndex + 1}`} />
+          <div className="aligned-pages">
+            {pages.map((page) => (
+              <article className="aligned-spread" key={page.pageIndex}>
+                <div className="original-panel">
+                  <div className="panel-label">Original · Page {page.pageIndex + 1}</div>
+                  <div className="paper-page source-page compact" style={{ aspectRatio: `${page.width} / ${page.height}` }}>
+                    <img src={page.canvasUrl} alt={`Original page ${page.pageIndex + 1}`} />
+                  </div>
                 </div>
-              ))}
-            </div>
 
-            <article className="generated-document">
-              <header className="document-title">
-                <p>{translation ? `${translation.sourceLanguage.toUpperCase()} -> ${translation.targetLanguage.toUpperCase()}` : "生成中"}</p>
-                <h2>{fileName.replace(/\.pdf$/i, "") || "Translated Paper"}</h2>
-              </header>
-
-              {pages.map((page) => (
-                <section className="document-section" key={page.pageIndex}>
-                  <h3>Page {page.pageIndex + 1}</h3>
-                  <figure className="page-snapshot">
-                    <img src={page.canvasUrl} alt={`Original visual snapshot for page ${page.pageIndex + 1}`} />
-                    <figcaption>原页截图，用于保留图表、公式和图片参考。</figcaption>
-                  </figure>
+                <section className="generated-document">
+                  {page.pageIndex === 0 && (
+                    <header className="document-title">
+                      <p>{translation ? `${translation.sourceLanguage.toUpperCase()} -> ${translation.targetLanguage.toUpperCase()}` : "生成中"}</p>
+                      <h2>{fileName.replace(/\.pdf$/i, "") || "Translated Paper"}</h2>
+                    </header>
+                  )}
+                  <div className="panel-label">Translation · Page {page.pageIndex + 1}</div>
 
                   {page.paragraphs.map((paragraph) => {
                     const item = translationMap.get(paragraph.id);
+                    if (item?.translatedText === "") return null;
                     return (
                       <p className={`document-paragraph${item ? "" : " pending"}`} key={paragraph.id}>
                         {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
@@ -329,8 +510,8 @@ export default function Home() {
                     );
                   })}
                 </section>
-              ))}
-            </article>
+              </article>
+            ))}
           </div>
         </section>
       )}

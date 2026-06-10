@@ -31,6 +31,7 @@ function cleanJson(raw: string) {
 
 function fallbackTranslate(body: TranslateRequest): TranslationPayload {
   const targetLanguage = body.sourceLanguage === "zh" ? "en" : "zh";
+  const fast = body.mode === "fast";
   return {
     sourceLanguage: body.sourceLanguage,
     targetLanguage,
@@ -40,8 +41,8 @@ function fallbackTranslate(body: TranslateRequest): TranslationPayload {
         targetLanguage === "zh"
           ? `【演示译文】${paragraph.text}`
           : `[Demo translation] ${paragraph.text}`,
-      coreSentence: paragraph.text.split(/[.!?。！？]/).find(Boolean)?.trim() ?? paragraph.text,
-      translatedCoreSentence: targetLanguage === "zh" ? "这是一句自动识别的核心句。" : "This is an auto-detected key sentence.",
+      coreSentence: fast ? "" : (paragraph.text.split(/[.!?。！？]/).find(Boolean)?.trim() ?? paragraph.text),
+      translatedCoreSentence: fast ? "" : targetLanguage === "zh" ? "这是一句自动识别的核心句。" : "This is an auto-detected key sentence.",
       terms: []
     }))
   };
@@ -50,6 +51,7 @@ function fallbackTranslate(body: TranslateRequest): TranslationPayload {
 export async function POST(request: Request) {
   const body = (await request.json()) as TranslateRequest;
   const targetLanguage = body.sourceLanguage === "zh" ? "en" : "zh";
+  const mode = body.mode ?? "enrich";
 
   if (!body.paragraphs?.length) {
     return NextResponse.json({ error: "No paragraphs supplied." }, { status: 400 });
@@ -62,14 +64,23 @@ export async function POST(request: Request) {
   const prompt = {
     sourceLanguage: body.sourceLanguage,
     targetLanguage,
+    mode,
     requirements: [
-      "Translate academic paper paragraphs quickly and faithfully.",
+      mode === "fast"
+        ? "Translate academic paper paragraphs as quickly and faithfully as possible."
+        : "Improve metadata for already translated academic paragraphs while keeping translation faithful.",
       "Do not attempt to preserve the original PDF layout; the client will render a clean HTML document.",
       "Keep citations, formulas, symbols, numbers, figure/table references, and bracketed references unchanged.",
       "Return one result for every input paragraph id.",
-      "Pick one core sentence per paragraph. For short paragraphs, pick the full paragraph.",
-      "Extract only important professional terms, abbreviations, methods, datasets, metrics, and domain concepts.",
-      "Explanations must be simple, concise, and written in the target language."
+      mode === "fast"
+        ? "For speed, translatedText is required; coreSentence, translatedCoreSentence, and terms can be empty."
+        : "Pick one core sentence per paragraph. For short paragraphs, pick the full paragraph.",
+      mode === "fast"
+        ? "Do not spend time extracting terms in this mode."
+        : "Extract only important professional terms, abbreviations, methods, datasets, metrics, and domain concepts.",
+      mode === "fast"
+        ? "Return compact JSON."
+        : "Each term explanation must be 1-3 sentences, using as many sentences as needed to be clear and concise, written in the target language."
     ],
     paragraphs: body.paragraphs
   };
@@ -87,7 +98,9 @@ export async function POST(request: Request) {
         {
           role: "system",
           content:
-            "You are a fast, accurate bilingual academic translator. Return strict JSON only with shape {items:[{id,translatedText,coreSentence,translatedCoreSentence,terms:[{source,target,explanation}]}]}."
+            mode === "fast"
+              ? "You are a very fast, accurate bilingual academic translator. Return strict JSON only with shape {items:[{id,translatedText,coreSentence,translatedCoreSentence,terms}]}."
+              : "You are a careful bilingual academic annotator. Return strict JSON only with shape {items:[{id,translatedText,coreSentence,translatedCoreSentence,terms:[{source,target,explanation}]}]}. Term explanations must be 1-3 clear sentences."
         },
         {
           role: "user",
