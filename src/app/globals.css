@@ -127,6 +127,59 @@ h1 {
   margin: 0;
 }
 
+.progress-wrap {
+  grid-column: 1 / -1;
+}
+
+.progress-meta {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  font-weight: 800;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.progress-meta span {
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0;
+}
+
+.progress-meta strong {
+  color: var(--ink);
+}
+
+.progress-track {
+  background: #edf1f7;
+  border-radius: 999px;
+  height: 9px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar {
+  background: linear-gradient(90deg, #60a5fa, #2563eb 55%, #1d4ed8);
+  border-radius: inherit;
+  height: 100%;
+  min-width: 0;
+  transition: width 260ms ease;
+}
+
+.status-strip[data-state="idle"] .progress-wrap {
+  display: none;
+}
+
+.status-strip[data-state="ready"] .progress-bar {
+  background: linear-gradient(90deg, #34d399, #059669);
+}
+
+.status-strip[data-state="error"] .progress-bar {
+  background: linear-gradient(90deg, #fca5a5, #dc2626);
+}
+
 .empty-state {
   align-items: center;
   background:

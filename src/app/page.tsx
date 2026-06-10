@@ -186,6 +186,7 @@ export default function Home() {
   const [fileName, setFileName] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("导入英文或中文 PDF，系统会自动识别方向并生成镜像排版译文。");
+  const [progress, setProgress] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const translationMap = useMemo(() => {
@@ -198,27 +199,33 @@ export default function Home() {
     setStatus("reading");
     setFileName(file.name);
     setTranslation(null);
+    setProgress(8);
     setMessage("正在解析 PDF 页面、段落和版面坐标...");
 
     try {
       const extracted = await extractPdf(file);
+      setProgress(28);
       const sourceLanguage = detectLanguage(extracted.fullText);
       const extractedParagraphs = extracted.pages.flatMap((page) =>
         page.paragraphs.map((paragraph) => ({ id: paragraph.id, text: paragraph.text }))
       );
       setPages(extracted.pages);
       setStatus("translating");
+      setProgress(32);
       setMessage(sourceLanguage === "zh" ? "检测到中文论文，正在生成英文版..." : "检测到英文论文，正在生成中文版...");
 
       const translated = await translateInBatches(sourceLanguage, extractedParagraphs, (done, total) => {
+        setProgress(32 + Math.round((done / total) * 66));
         setMessage(`正在翻译段落 ${done} / ${total}...`);
       });
 
       setTranslation(translated);
       setStatus("ready");
+      setProgress(100);
       setMessage(sourceLanguage === "zh" ? "英文镜像论文已生成。" : "中文版镜像论文已生成。");
     } catch (error) {
       setStatus("error");
+      setProgress(0);
       const detail = error instanceof Error ? error.message : "处理 PDF 时发生错误。";
       setMessage(detail === "Failed to fetch" ? "网络请求失败，请刷新后重试；如果 PDF 很大，可以先用较短论文测试。" : detail);
     }
@@ -255,6 +262,15 @@ export default function Home() {
         <span>{status === "idle" ? "待导入" : status === "ready" ? "已完成" : status === "error" ? "出错" : "处理中"}</span>
         <strong>{fileName || "还没有选择文件"}</strong>
         <p>{message}</p>
+        <div className="progress-wrap" aria-hidden={status === "idle"}>
+          <div className="progress-meta">
+            <span>进度</span>
+            <strong>{progress}%</strong>
+          </div>
+          <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+            <div className="progress-bar" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
       </section>
 
       {pages.length === 0 ? (
