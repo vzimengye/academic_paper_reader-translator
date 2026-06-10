@@ -572,6 +572,15 @@ h1 {
   text-align: left;
 }
 
+.document-paragraph.front-matter {
+  color: #374151;
+  font-size: 15px;
+  line-height: 1.65;
+  margin: 0 auto 8px;
+  max-width: 86%;
+  text-align: center;
+}
+
 .translated-heading {
   color: #111827;
   font-family:

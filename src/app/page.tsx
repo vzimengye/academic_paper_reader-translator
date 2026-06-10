@@ -90,10 +90,6 @@ function detectTextRole(text: string, fontSize: number, medianSize: number, page
   const visual = detectVisualCaption(trimmed);
   if (visual !== "text") return visual;
 
-  if (pageIndex === 0 && top < pageHeight * 0.22 && fontSize >= medianSize * 1.55 && trimmed.length < 180) {
-    return "title";
-  }
-
   if (/^(abstract|introduction|background|related work|method|methods|methodology|approach|experiments?|results?|discussion|limitations?|conclusion|references|acknowledg(e)?ments?|appendix)\b/i.test(trimmed)) {
     return "heading1";
   }
@@ -270,7 +266,35 @@ function rowsToParagraphs(rows: TextRow[], pageIndex: number, pageHeight: number
   });
 
   flush();
+  normalizeFrontMatter(paragraphs, pageIndex, pageHeight);
   return paragraphs;
+}
+
+function normalizeFrontMatter(paragraphs: PaperParagraph[], pageIndex: number, pageHeight: number) {
+  if (pageIndex !== 0) return;
+
+  const abstractIndex = paragraphs.findIndex((paragraph) => /^abstract\b/i.test(paragraph.text.trim()));
+  const frontEnd = abstractIndex > 0 ? abstractIndex : paragraphs.findIndex((paragraph) => paragraph.box.y > pageHeight * 0.42);
+  const candidates = paragraphs
+    .map((paragraph, index) => ({ paragraph, index }))
+    .filter(({ paragraph, index }) => {
+      if (frontEnd >= 0 && index >= frontEnd) return false;
+      if (paragraph.role === "figureCaption" || paragraph.role === "tableCaption") return false;
+      if (paragraph.box.y > pageHeight * 0.36) return false;
+      return paragraph.text.trim().length > 8;
+    });
+
+  if (!candidates.length) return;
+
+  const titleCandidate =
+    candidates
+      .filter(({ paragraph }) => paragraph.text.length < 220)
+      .sort((a, b) => (b.paragraph.fontSize ?? 0) - (a.paragraph.fontSize ?? 0) || a.paragraph.box.y - b.paragraph.box.y)[0] ?? candidates[0];
+
+  candidates.forEach(({ paragraph, index }) => {
+    paragraph.role = index === titleCandidate.index ? "title" : "frontMatter";
+    paragraph.fontWeight = index === titleCandidate.index ? "bold" : paragraph.fontWeight ?? "regular";
+  });
 }
 
 function attachVisualSnapshots(paragraphs: PaperParagraph[], canvas: HTMLCanvasElement, pageWidth: number, pageHeight: number) {
@@ -361,6 +385,26 @@ function renderWithTerms(text: string, item?: TranslationItem) {
   });
 
   return pieces;
+}
+
+function renderTermsOnly(text: string, item?: TranslationItem) {
+  const terms = (item?.terms ?? []).filter((term) => term.target || term.source);
+  return terms.reduce<TextPiece[]>(
+    (acc, term) => {
+      const needle = term.target || term.source;
+      return acc.flatMap((part) => {
+        if (part.term || !needle) return [part];
+        const idx = part.text.toLowerCase().indexOf(needle.toLowerCase());
+        if (idx < 0) return [part];
+        return [
+          { text: part.text.slice(0, idx), mark: false },
+          { text: part.text.slice(idx, idx + needle.length), mark: false, term },
+          { text: part.text.slice(idx + needle.length), mark: false }
+        ].filter((next) => next.text);
+      });
+    },
+    [{ text, mark: false }]
+  );
 }
 
 async function extractPdf(file: File): Promise<{ pages: RenderedPage[]; fullText: string }> {
@@ -995,6 +1039,23 @@ export default function Home() {
                             )}
                           </figcaption>
                         </figure>
+                      );
+                    }
+                    if (paragraph.role === "frontMatter") {
+                      return (
+                        <p className={`document-paragraph front-matter${item ? "" : " pending"}`} key={paragraph.id}>
+                          {renderTermsOnly(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
+                            piece.term ? (
+                              <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
+                                {piece.text}
+                              </span>
+                            ) : piece.mark ? (
+                              <mark key={`${paragraph.id}-${index}`}>{piece.text}</mark>
+                            ) : (
+                              <span key={`${paragraph.id}-${index}`}>{piece.text}</span>
+                            )
+                          )}
+                        </p>
                       );
                     }
                     if (paragraph.role === "title" || paragraph.role === "heading1" || paragraph.role === "heading2") {
