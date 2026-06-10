@@ -413,6 +413,36 @@ h1 {
   padding: 10px 12px;
 }
 
+.visual-block {
+  background: #fbfcfe;
+  border: 1px solid #e7ebf2;
+  border-radius: 8px;
+  margin: 22px auto 24px;
+  max-width: 92%;
+  padding: 14px;
+  text-align: center;
+}
+
+.visual-block img {
+  background: white;
+  border-radius: 4px;
+  display: block;
+  height: auto;
+  margin: 0 auto 12px;
+  max-height: 520px;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.visual-block figcaption {
+  color: #374151;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.55;
+  margin: 0 auto;
+  max-width: 88%;
+}
+
 mark {
   background: var(--mark);
   border-radius: 4px;

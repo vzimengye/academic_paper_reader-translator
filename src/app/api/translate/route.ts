@@ -71,6 +71,7 @@ export async function POST(request: Request) {
         : "Improve metadata for already translated academic paragraphs while keeping translation faithful.",
       "Do not attempt to preserve the original PDF layout; the client will render a clean HTML document.",
       "Keep citations, formulas, symbols, numbers, figure/table references, and bracketed references unchanged.",
+      "If a paragraph is a figure/table/graph caption, translate only the caption title and caption text; do not describe or regenerate the visual content.",
       "Return one result for every input paragraph id.",
       mode === "fast"
         ? "For speed, translatedText is required; coreSentence, translatedCoreSentence, and terms can be empty."

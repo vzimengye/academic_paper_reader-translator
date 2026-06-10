@@ -40,6 +40,77 @@ function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function detectVisualCaption(text: string): PaperParagraph["role"] {
+  const normalized = text.trim();
+  if (/^(fig(?:ure)?\.?|graph|chart)\s*[\dIVXLC]+[\s:：.\-]/i.test(normalized) || /^图\s*\d+[\s:：.\-]/.test(normalized)) {
+    return "figureCaption";
+  }
+  if (/^table\s*[\dIVXLC]+[\s:：.\-]/i.test(normalized) || /^表\s*\d+[\s:：.\-]/.test(normalized)) {
+    return "tableCaption";
+  }
+  return "text";
+}
+
+function cropCanvas(canvas: HTMLCanvasElement, box: { x: number; y: number; width: number; height: number }, scale: number) {
+  const sx = Math.max(0, Math.floor(box.x * scale));
+  const sy = Math.max(0, Math.floor(box.y * scale));
+  const sw = Math.min(canvas.width - sx, Math.floor(box.width * scale));
+  const sh = Math.min(canvas.height - sy, Math.floor(box.height * scale));
+
+  if (sw < 80 || sh < 60) return undefined;
+
+  const cropped = document.createElement("canvas");
+  cropped.width = sw;
+  cropped.height = sh;
+  const croppedContext = cropped.getContext("2d");
+  if (!croppedContext) return undefined;
+  croppedContext.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  return cropped.toDataURL("image/png");
+}
+
+function attachVisualSnapshots(paragraphs: PaperParagraph[], canvas: HTMLCanvasElement, pageWidth: number, pageHeight: number) {
+  const renderScale = canvas.width / pageWidth;
+
+  paragraphs.forEach((paragraph, index) => {
+    const role = detectVisualCaption(paragraph.text);
+    paragraph.role = role;
+
+    if (role === "text") return;
+
+    const previous = paragraphs[index - 1];
+    const next = paragraphs[index + 1];
+    const marginX = pageWidth * 0.07;
+    const minY = pageHeight * 0.04;
+    const maxY = pageHeight * 0.96;
+    let y = minY;
+    let height = 0;
+
+    if (role === "tableCaption") {
+      y = Math.min(maxY, paragraph.box.y + paragraph.box.height + 8);
+      const nextTop = next ? next.box.y - 10 : maxY;
+      height = Math.min(pageHeight * 0.36, Math.max(0, nextTop - y));
+    } else {
+      const previousBottom = previous ? previous.box.y + previous.box.height + 10 : minY;
+      const captionTop = Math.max(minY, paragraph.box.y - 8);
+      y = Math.max(minY, Math.min(previousBottom, captionTop - pageHeight * 0.12));
+      height = Math.min(pageHeight * 0.42, Math.max(0, captionTop - y));
+    }
+
+    if (height < 60) return;
+
+    paragraph.imageUrl = cropCanvas(
+      canvas,
+      {
+        x: marginX,
+        y,
+        width: pageWidth - marginX * 2,
+        height
+      },
+      renderScale
+    );
+  });
+}
+
 function sentencePieces(text: string, highlight?: string): TextPiece[] {
   if (!highlight) return [{ text, mark: false }];
   const index = text.toLowerCase().indexOf(highlight.toLowerCase());
@@ -152,6 +223,7 @@ async function extractPdf(file: File): Promise<{ pages: RenderedPage[]; fullText
       current.push(row);
     });
     flush();
+    attachVisualSnapshots(paragraphs, canvas, textViewport.width, textViewport.height);
 
     pages.push({
       pageIndex: pageNumber - 1,
@@ -185,6 +257,17 @@ function buildTranslationUnits(pages: RenderedPage[]): TranslationUnit[] {
     };
 
     page.paragraphs.forEach((paragraph) => {
+      if (paragraph.role && paragraph.role !== "text") {
+        flush();
+        units.push({
+          id: paragraph.id,
+          ids: [paragraph.id],
+          pageIndex: paragraph.pageIndex,
+          text: paragraph.text
+        });
+        return;
+      }
+
       const canMerge = current !== null && current.text.length + paragraph.text.length < 520;
 
       if (current && canMerge && shouldMergeWithNext(current.text)) {
@@ -556,6 +639,27 @@ export default function Home() {
                   {page.paragraphs.map((paragraph) => {
                     const item = translationMap.get(paragraph.id);
                     if (item?.translatedText === "") return null;
+                    const isVisual = paragraph.role === "figureCaption" || paragraph.role === "tableCaption";
+                    if (isVisual) {
+                      return (
+                        <figure className="visual-block" key={paragraph.id}>
+                          {paragraph.imageUrl && <img src={paragraph.imageUrl} alt={paragraph.text} />}
+                          <figcaption>
+                            {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
+                              piece.term ? (
+                                <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
+                                  {piece.text}
+                                </span>
+                              ) : piece.mark ? (
+                                <mark key={`${paragraph.id}-${index}`}>{piece.text}</mark>
+                              ) : (
+                                <span key={`${paragraph.id}-${index}`}>{piece.text}</span>
+                              )
+                            )}
+                          </figcaption>
+                        </figure>
+                      );
+                    }
                     return (
                       <p className={`document-paragraph${item ? "" : " pending"}`} key={paragraph.id}>
                         {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
