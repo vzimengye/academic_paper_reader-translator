@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
-import { prisma } from "@/lib/prisma";
+import { getSql } from "@/lib/db";
 
 export const SESSION_COOKIE = "apr_session";
 const SESSION_DAYS = 30;
@@ -22,7 +22,9 @@ export function verifyPassword(password: string, stored: string) {
 export async function createSession(userId: string) {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
-  await prisma.session.create({ data: { token, userId, expiresAt } });
+  const id = randomBytes(16).toString("hex");
+  const sql = getSql();
+  await sql`INSERT INTO "Session" ("id", "token", "userId", "expiresAt") VALUES (${id}, ${token}, ${userId}, ${expiresAt.toISOString()})`;
 
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {
@@ -38,7 +40,8 @@ export async function destroySession() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (token) {
-    await prisma.session.deleteMany({ where: { token } });
+    const sql = getSql();
+    await sql`DELETE FROM "Session" WHERE "token" = ${token}`;
   }
   cookieStore.delete(SESSION_COOKIE);
 }
@@ -48,15 +51,22 @@ export async function getCurrentUser() {
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const session = await prisma.session.findUnique({
-    where: { token },
-    include: { user: { select: { id: true, email: true, name: true, createdAt: true } } }
-  });
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT s."expiresAt", u."id", u."email", u."name", u."createdAt"
+    FROM "Session" s
+    JOIN "User" u ON u."id" = s."userId"
+    WHERE s."token" = ${token}
+    LIMIT 1
+  `) as Array<Record<string, unknown>>;
+  const session = rows[0] as
+    | { expiresAt: string | Date; id: string; email: string; name: string | null; createdAt: string | Date }
+    | undefined;
 
-  if (!session || session.expiresAt < new Date()) {
-    if (session) await prisma.session.deleteMany({ where: { token } });
+  if (!session || new Date(session.expiresAt) < new Date()) {
+    if (session) await sql`DELETE FROM "Session" WHERE "token" = ${token}`;
     return null;
   }
 
-  return session.user;
+  return { id: session.id, email: session.email, name: session.name, createdAt: session.createdAt };
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSession, hashPassword } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { randomBytes } from "crypto";
+import { getSql } from "@/lib/db";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as { email?: string; password?: string; name?: string };
@@ -16,15 +17,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "密码至少需要 8 位。" }, { status: 400 });
   }
 
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) {
+  const sql = getSql();
+  const existing = (await sql`SELECT "id" FROM "User" WHERE "email" = ${email} LIMIT 1`) as Array<Record<string, unknown>>;
+  if (existing.length) {
     return NextResponse.json({ error: "这个邮箱已经注册。" }, { status: 409 });
   }
 
-  const user = await prisma.user.create({
-    data: { email, name, passwordHash: hashPassword(password) },
-    select: { id: true, email: true, name: true, createdAt: true }
-  });
+  const id = randomBytes(16).toString("hex");
+  const rows = (await sql`
+    INSERT INTO "User" ("id", "email", "name", "passwordHash")
+    VALUES (${id}, ${email}, ${name}, ${hashPassword(password)})
+    RETURNING "id", "email", "name", "createdAt"
+  `) as Array<{ id: string; email: string; name: string | null; createdAt: string | Date }>;
+  const user = rows[0];
 
   await createSession(user.id);
   return NextResponse.json({ user });

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSession, verifyPassword } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { getSql } from "@/lib/db";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as { email?: string; password?: string };
@@ -11,7 +11,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "请输入邮箱和密码。" }, { status: 400 });
   }
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  const sql = getSql();
+  const rows = (await sql`SELECT "id", "email", "name", "passwordHash", "createdAt" FROM "User" WHERE "email" = ${email} LIMIT 1`) as Array<{
+    id: string;
+    email: string;
+    name: string | null;
+    passwordHash: string;
+    createdAt: string | Date;
+  }>;
+  const user = rows[0] as { id: string; email: string; name: string | null; passwordHash: string; createdAt: string | Date } | undefined;
   if (!user || !verifyPassword(password, user.passwordHash)) {
     return NextResponse.json({ error: "邮箱或密码不正确。" }, { status: 401 });
   }
