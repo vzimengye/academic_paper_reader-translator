@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PaperPage, PaperParagraph, TranslationItem, TranslationPayload } from "@/lib/paper";
 import { detectLanguage } from "@/lib/paper";
 
@@ -30,6 +30,23 @@ type TranslationUnit = {
   ids: string[];
   pageIndex: number;
   text: string;
+};
+
+type AuthUser = {
+  id: string;
+  email: string;
+  name?: string | null;
+};
+
+type DocumentRecord = {
+  id: string;
+  fileName: string;
+  title?: string | null;
+  sourceLanguage: string;
+  targetLanguage: string;
+  pageCount: number;
+  paragraphCount: number;
+  createdAt: string;
 };
 
 type TextRow = {
@@ -634,6 +651,15 @@ async function translateUnits(
   return items;
 }
 
+async function parseApiError(response: Response) {
+  try {
+    const data = (await response.json()) as { error?: string };
+    return data.error || `请求失败：${response.status}`;
+  } catch {
+    return `请求失败：${response.status}`;
+  }
+}
+
 export default function Home() {
   const [pages, setPages] = useState<RenderedPage[]>([]);
   const [translation, setTranslation] = useState<TranslationPayload | null>(null);
@@ -641,6 +667,13 @@ export default function Home() {
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("导入英文或中文 PDF，系统会快速识别内容并生成新的双语 HTML 文档。");
   const [progress, setProgress] = useState(0);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const translationCacheRef = useRef(new Map<string, TranslationItem>());
 
@@ -658,6 +691,66 @@ export default function Home() {
         text: translationMap.get(paragraph.id)?.translatedText || paragraph.text
       }));
   }, [paragraphs, translationMap]);
+
+  async function refreshDocuments() {
+    const response = await fetch("/api/documents");
+    if (!response.ok) return;
+    const data = (await response.json()) as { documents: DocumentRecord[] };
+    setDocuments(data.documents);
+  }
+
+  useEffect(() => {
+    void (async () => {
+      const response = await fetch("/api/auth/me");
+      if (!response.ok) return;
+      const data = (await response.json()) as { user: AuthUser | null };
+      setUser(data.user);
+      if (data.user) await refreshDocuments();
+    })();
+  }, []);
+
+  async function submitAuth() {
+    setAuthMessage("");
+    const response = await fetch(`/api/auth/${authMode}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: authEmail, password: authPassword, name: authName })
+    });
+
+    if (!response.ok) {
+      setAuthMessage(await parseApiError(response));
+      return;
+    }
+
+    const data = (await response.json()) as { user: AuthUser };
+    setUser(data.user);
+    setAuthPassword("");
+    setAuthMessage(authMode === "login" ? "已登录。" : "注册成功。");
+    await refreshDocuments();
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setUser(null);
+    setDocuments([]);
+  }
+
+  async function saveDocumentRecord(payload: {
+    fileName: string;
+    title?: string;
+    sourceLanguage: string;
+    targetLanguage: string;
+    pageCount: number;
+    paragraphCount: number;
+  }) {
+    if (!user) return;
+    const response = await fetch("/api/documents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (response.ok) await refreshDocuments();
+  }
 
   async function handleFile(file: File) {
     setStatus("reading");
@@ -714,6 +807,14 @@ export default function Home() {
       setStatus("ready");
       setProgress(100);
       setMessage(sourceLanguage === "zh" ? "英文 HTML 文档已生成。" : "中文 HTML 文档已生成。");
+      await saveDocumentRecord({
+        fileName: file.name,
+        title: extracted.pages.flatMap((page) => page.paragraphs).find((paragraph) => paragraph.role === "title")?.text ?? file.name.replace(/\.pdf$/i, ""),
+        sourceLanguage,
+        targetLanguage: targetLanguageOf(sourceLanguage),
+        pageCount: extracted.pages.length,
+        paragraphCount: extracted.pages.flatMap((page) => page.paragraphs).length
+      });
     } catch (error) {
       setStatus("error");
       setProgress(0);
@@ -748,6 +849,56 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      <section className="account-panel">
+        {user ? (
+          <>
+            <div className="account-summary">
+              <strong>{user.name || user.email}</strong>
+              <span>{user.email}</span>
+            </div>
+            <button type="button" className="ghost" onClick={() => void logout()}>
+              退出登录
+            </button>
+            <div className="document-history">
+              <strong>我的文档</strong>
+              {documents.length ? (
+                documents.slice(0, 6).map((document) => (
+                  <div className="history-item" key={document.id}>
+                    <span>{document.title || document.fileName}</span>
+                    <small>
+                      {document.sourceLanguage.toUpperCase()} → {document.targetLanguage.toUpperCase()} · {document.pageCount} 页 ·{" "}
+                      {new Date(document.createdAt).toLocaleDateString()}
+                    </small>
+                  </div>
+                ))
+              ) : (
+                <small>完成一次翻译后会自动保存记录。</small>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="auth-tabs">
+              <button type="button" className={authMode === "login" ? "active" : ""} onClick={() => setAuthMode("login")}>
+                登录
+              </button>
+              <button type="button" className={authMode === "register" ? "active" : ""} onClick={() => setAuthMode("register")}>
+                注册
+              </button>
+            </div>
+            {authMode === "register" && (
+              <input value={authName} onChange={(event) => setAuthName(event.target.value)} placeholder="昵称，可选" />
+            )}
+            <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="邮箱" />
+            <input value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="密码，至少 8 位" type="password" />
+            <button type="button" onClick={() => void submitAuth()}>
+              {authMode === "login" ? "登录" : "注册"}
+            </button>
+            <span className="auth-message">{authMessage || "登录后会保存每个用户自己的文档记录。"}</span>
+          </>
+        )}
+      </section>
 
       <section className="status-strip" data-state={status}>
         <span>{status === "idle" ? "待导入" : status === "ready" ? "已完成" : status === "error" ? "出错" : "处理中"}</span>

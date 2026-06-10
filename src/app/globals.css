@@ -89,6 +89,90 @@ h1 {
   display: none;
 }
 
+.account-panel {
+  align-items: center;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 auto 16px;
+  max-width: 1480px;
+  padding: 12px;
+}
+
+.account-panel input {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+  min-width: 180px;
+  padding: 10px 11px;
+}
+
+.auth-tabs {
+  background: #f3f6fb;
+  border-radius: 8px;
+  display: flex;
+  padding: 3px;
+}
+
+.auth-tabs button {
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 12px;
+}
+
+.auth-tabs button.active {
+  background: white;
+  color: var(--accent);
+  box-shadow: 0 1px 4px rgba(29, 36, 51, 0.08);
+}
+
+.auth-message {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-summary {
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+}
+
+.account-summary span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.document-history {
+  border-left: 1px solid var(--line);
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  min-width: 260px;
+  padding-left: 14px;
+}
+
+.document-history > strong {
+  font-size: 13px;
+}
+
+.history-item {
+  display: grid;
+  gap: 2px;
+}
+
+.history-item span {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.history-item small,
+.document-history small {
+  color: var(--muted);
+}
+
 .status-strip {
   align-items: center;
   background: white;
