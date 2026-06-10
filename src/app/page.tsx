@@ -146,7 +146,7 @@ async function extractPdf(file: File): Promise<{ pages: RenderedPage[]; fullText
 async function translateInBatches(
   sourceLanguage: "en" | "zh",
   paragraphs: Array<Pick<PaperParagraph, "id" | "text">>,
-  onProgress: (done: number, total: number) => void
+  onBatch: (payload: TranslationPayload, done: number, total: number) => void
 ) {
   let payload: TranslationPayload | null = null;
 
@@ -170,7 +170,7 @@ async function translateInBatches(
       payload = { sourceLanguage: next.sourceLanguage, targetLanguage: next.targetLanguage, items: next.items };
     }
 
-    onProgress(Math.min(index + batch.length, paragraphs.length), paragraphs.length);
+    onBatch(payload, Math.min(index + batch.length, paragraphs.length), paragraphs.length);
   }
 
   if (!payload) {
@@ -213,13 +213,14 @@ export default function Home() {
       setStatus("translating");
       setProgress(32);
       setMessage(sourceLanguage === "zh" ? "检测到中文论文，正在生成英文版..." : "检测到英文论文，正在生成中文版...");
+      setTranslation({ sourceLanguage, targetLanguage: sourceLanguage === "zh" ? "en" : "zh", items: [] });
 
-      const translated = await translateInBatches(sourceLanguage, extractedParagraphs, (done, total) => {
+      await translateInBatches(sourceLanguage, extractedParagraphs, (partial, done, total) => {
+        setTranslation({ ...partial, items: [...partial.items] });
         setProgress(32 + Math.round((done / total) * 66));
         setMessage(`正在翻译段落 ${done} / ${total}...`);
       });
 
-      setTranslation(translated);
       setStatus("ready");
       setProgress(100);
       setMessage(sourceLanguage === "zh" ? "英文镜像论文已生成。" : "中文版镜像论文已生成。");
@@ -315,11 +316,11 @@ export default function Home() {
                   const width = (paragraph.box.width / page.width) * 100;
                   return (
                     <p
-                      className="translated-paragraph"
+                      className={`translated-paragraph${item ? "" : " pending"}`}
                       key={paragraph.id}
                       style={{ left: `${left}%`, top: `${top}%`, width: `${width}%` }}
                     >
-                      {renderWithTerms(item?.translatedText ?? "翻译生成中...", item).map((piece, index) =>
+                      {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
                         piece.term ? (
                           <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
                             {piece.text}
