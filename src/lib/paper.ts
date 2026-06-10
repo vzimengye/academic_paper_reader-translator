@@ -12,8 +12,10 @@ export type PaperParagraph = {
   pageIndex: number;
   text: string;
   box: Box;
-  role?: "text" | "figureCaption" | "tableCaption";
+  role?: "text" | "title" | "heading1" | "heading2" | "figureCaption" | "tableCaption";
   imageUrl?: string;
+  fontSize?: number;
+  fontWeight?: "regular" | "bold";
 };
 
 export type PaperPage = {

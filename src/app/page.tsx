@@ -32,6 +32,17 @@ type TranslationUnit = {
   text: string;
 };
 
+type TextRow = {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+  fontName: string;
+  column: "left" | "right" | "full";
+};
+
 function targetLanguageOf(sourceLanguage: "en" | "zh") {
   return sourceLanguage === "zh" ? "en" : "zh";
 }
@@ -40,14 +51,42 @@ function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function median(values: number[]) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
 function detectVisualCaption(text: string): PaperParagraph["role"] {
   const normalized = text.trim();
-  if (/^(fig(?:ure)?\.?|graph|chart)\s*[\dIVXLC]+[\s:：.\-]/i.test(normalized) || /^图\s*\d+[\s:：.\-]/.test(normalized)) {
+  if (/^(fig(?:ure)?\.?|graph|chart)\s*[\wIVXLC]+(?:\s*[.:：|\-])?/i.test(normalized) || /^图\s*\d+(?:\s*[.:：|\-])?/.test(normalized)) {
     return "figureCaption";
   }
-  if (/^table\s*[\dIVXLC]+[\s:：.\-]/i.test(normalized) || /^表\s*\d+[\s:：.\-]/.test(normalized)) {
+  if (/^table\s*[\wIVXLC]+(?:\s*[.:：|\-])?/i.test(normalized) || /^表\s*\d+(?:\s*[.:：|\-])?/.test(normalized)) {
     return "tableCaption";
   }
+  return "text";
+}
+
+function detectTextRole(text: string, fontSize: number, medianSize: number, pageIndex: number, top: number, pageHeight: number): PaperParagraph["role"] {
+  const trimmed = text.trim();
+  const visual = detectVisualCaption(trimmed);
+  if (visual !== "text") return visual;
+
+  if (pageIndex === 0 && top < pageHeight * 0.22 && fontSize >= medianSize * 1.55 && trimmed.length < 180) {
+    return "title";
+  }
+
+  if (/^(abstract|introduction|background|related work|method|methods|methodology|approach|experiments?|results?|discussion|limitations?|conclusion|references|acknowledg(e)?ments?|appendix)\b/i.test(trimmed)) {
+    return "heading1";
+  }
+
+  if (/^\d+(\.\d+)*\.?\s+[A-Z][\w\s,():\-]{2,}$/.test(trimmed) && trimmed.length < 110) {
+    return fontSize >= medianSize * 1.05 ? "heading1" : "heading2";
+  }
+
+  if (fontSize >= medianSize * 1.28 && trimmed.length < 120) return "heading1";
+  if (fontSize >= medianSize * 1.14 && trimmed.length < 120) return "heading2";
   return "text";
 }
 
@@ -68,18 +107,175 @@ function cropCanvas(canvas: HTMLCanvasElement, box: { x: number; y: number; widt
   return cropped.toDataURL("image/png");
 }
 
+function buildRows(
+  contentItems: unknown[],
+  pageWidth: number,
+  pageHeight: number
+): TextRow[] {
+  const raw = contentItems
+    .map((item, index) => {
+      const textItem = item as { str: string; transform: number[]; width: number; height: number; fontName?: string };
+      const [, b, c, d, x, y] = textItem.transform;
+      const fontSize = Math.max(Math.hypot(b, d), textItem.height || 0, 1);
+      return {
+        index,
+        text: textItem.str.trim(),
+        x,
+        y: pageHeight - y,
+        width: Math.max(textItem.width, 2),
+        height: Math.max(textItem.height || fontSize, 2),
+        fontSize,
+        fontName: textItem.fontName ?? "",
+        column: "full" as TextRow["column"]
+      };
+    })
+    .filter((item) => item.text);
+
+  const grouped: Array<typeof raw> = [];
+
+  raw
+    .sort((a, b) => (Math.abs(a.y - b.y) > 3 ? a.y - b.y : a.x - b.x))
+    .forEach((item) => {
+      const row = grouped.find((candidate) => Math.abs(median(candidate.map((part) => part.y)) - item.y) < Math.max(3, item.fontSize * 0.45));
+      if (row) row.push(item);
+      else grouped.push([item]);
+    });
+
+  const rows = grouped
+    .map((parts) => {
+      const sorted = parts.sort((a, b) => a.x - b.x);
+      const left = Math.min(...sorted.map((part) => part.x));
+      const top = Math.min(...sorted.map((part) => part.y - part.height));
+      const right = Math.max(...sorted.map((part) => part.x + part.width));
+      const bottom = Math.max(...sorted.map((part) => part.y + part.height * 0.25));
+      const fontSize = median(sorted.map((part) => part.fontSize));
+      return {
+        text: sorted.map((part) => part.text).join(" ").replace(/\s+/g, " ").trim(),
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+        fontSize,
+        fontName: sorted.map((part) => part.fontName).find(Boolean) ?? "",
+        column: "full" as TextRow["column"]
+      };
+    })
+    .filter((row) => row.text.length > 0);
+
+  const bodyRows = rows.filter((row) => row.y > pageHeight * 0.18 && row.width < pageWidth * 0.58);
+  const leftCount = bodyRows.filter((row) => row.x + row.width / 2 < pageWidth / 2).length;
+  const rightCount = bodyRows.filter((row) => row.x + row.width / 2 >= pageWidth / 2).length;
+  const isTwoColumn = Math.min(leftCount, rightCount) >= 8;
+
+  rows.forEach((row) => {
+    const center = row.x + row.width / 2;
+    if (!isTwoColumn || row.width > pageWidth * 0.58 || row.x < pageWidth * 0.12 && row.x + row.width > pageWidth * 0.88) {
+      row.column = "full";
+    } else {
+      row.column = center < pageWidth / 2 ? "left" : "right";
+    }
+  });
+
+  if (!isTwoColumn) {
+    return rows.sort((a, b) => (Math.abs(a.y - b.y) > 4 ? a.y - b.y : a.x - b.x));
+  }
+
+  const fullRows = rows.filter((row) => row.column === "full").sort((a, b) => a.y - b.y);
+  const columnRows = rows
+    .filter((row) => row.column !== "full")
+    .sort((a, b) => {
+      if (a.column !== b.column) return a.column === "left" ? -1 : 1;
+      return Math.abs(a.y - b.y) > 4 ? a.y - b.y : a.x - b.x;
+    });
+
+  const earlyFull = fullRows.filter((row) => row.y < pageHeight * 0.28);
+  const lateFull = fullRows.filter((row) => row.y >= pageHeight * 0.28);
+  return [...earlyFull, ...columnRows, ...lateFull].sort((a, b) => {
+    const aEarly = a.column === "full" && a.y < pageHeight * 0.28;
+    const bEarly = b.column === "full" && b.y < pageHeight * 0.28;
+    if (aEarly || bEarly) return a.y - b.y;
+    if (a.column === "full" && b.column !== "full") return a.y < b.y ? -1 : 1;
+    if (a.column !== "full" && b.column === "full") return a.y < b.y ? -1 : 1;
+    if (a.column !== b.column) return a.column === "left" ? -1 : 1;
+    return Math.abs(a.y - b.y) > 4 ? a.y - b.y : a.x - b.x;
+  });
+}
+
+function rowsToParagraphs(rows: TextRow[], pageIndex: number, pageHeight: number) {
+  const paragraphs: PaperParagraph[] = [];
+  const bodySize = median(rows.filter((row) => row.text.length > 20).map((row) => row.fontSize)) || 10;
+  let current: TextRow[] = [];
+  let currentRole: PaperParagraph["role"] = "text";
+
+  const flush = () => {
+    if (!current.length) return;
+    const text = current.map((item) => item.text).join(" ").replace(/\s+/g, " ").trim();
+    if (text.length < 2) {
+      current = [];
+      return;
+    }
+    const left = Math.min(...current.map((item) => item.x));
+    const top = Math.min(...current.map((item) => item.y));
+    const right = Math.max(...current.map((item) => item.x + item.width));
+    const bottom = Math.max(...current.map((item) => item.y + item.height));
+    const fontSize = median(current.map((item) => item.fontSize));
+    const fontName = current.map((item) => item.fontName).join(" ");
+    paragraphs.push({
+      id: `p${pageIndex + 1}-${paragraphs.length}`,
+      pageIndex,
+      text,
+      role: currentRole,
+      fontSize,
+      fontWeight: /bold|black|heavy|semibold/i.test(fontName) || currentRole !== "text" ? "bold" : "regular",
+      box: { x: left, y: top, width: right - left, height: bottom - top }
+    });
+    current = [];
+  };
+
+  rows.forEach((row, index) => {
+    const role = detectTextRole(row.text, row.fontSize, bodySize, pageIndex, row.y, pageHeight);
+    const prev = rows[index - 1];
+    const verticalGap = prev ? Math.abs(row.y - (prev.y + prev.height)) : 0;
+    const changedColumn = prev && row.column !== prev.column;
+    const roleIsBlock = role !== "text";
+    const currentIsBlock = currentRole !== "text";
+    const newParagraph =
+      current.length > 0 &&
+      (changedColumn ||
+        roleIsBlock ||
+        currentIsBlock ||
+        verticalGap > Math.max(12, bodySize * 1.35) ||
+        /[.!?。！？]$/.test(current[current.length - 1].text) && verticalGap > bodySize * 0.65);
+
+    if (newParagraph) flush();
+    currentRole = current.length ? currentRole : role;
+    current.push(row);
+  });
+
+  flush();
+  return paragraphs;
+}
+
 function attachVisualSnapshots(paragraphs: PaperParagraph[], canvas: HTMLCanvasElement, pageWidth: number, pageHeight: number) {
   const renderScale = canvas.width / pageWidth;
 
   paragraphs.forEach((paragraph, index) => {
-    const role = detectVisualCaption(paragraph.text);
+    const role = paragraph.role ?? detectVisualCaption(paragraph.text);
     paragraph.role = role;
 
-    if (role === "text") return;
+    if (role !== "figureCaption" && role !== "tableCaption") return;
 
     const previous = paragraphs[index - 1];
     const next = paragraphs[index + 1];
-    const marginX = pageWidth * 0.07;
+    const captionCenter = paragraph.box.x + paragraph.box.width / 2;
+    const isColumnCaption = paragraph.box.width < pageWidth * 0.48;
+    const gutter = pageWidth * 0.025;
+    const columnBox =
+      isColumnCaption && captionCenter < pageWidth / 2
+        ? { x: pageWidth * 0.05, width: pageWidth * 0.45 - gutter }
+        : isColumnCaption
+          ? { x: pageWidth * 0.5 + gutter, width: pageWidth * 0.45 - gutter }
+          : { x: pageWidth * 0.06, width: pageWidth * 0.88 };
     const minY = pageHeight * 0.04;
     const maxY = pageHeight * 0.96;
     let y = minY;
@@ -87,10 +283,11 @@ function attachVisualSnapshots(paragraphs: PaperParagraph[], canvas: HTMLCanvasE
 
     if (role === "tableCaption") {
       y = Math.min(maxY, paragraph.box.y + paragraph.box.height + 8);
-      const nextTop = next ? next.box.y - 10 : maxY;
+      const nextTop = next && Math.abs(next.box.x - paragraph.box.x) < pageWidth * 0.22 ? next.box.y - 10 : Math.min(maxY, y + pageHeight * 0.28);
       height = Math.min(pageHeight * 0.36, Math.max(0, nextTop - y));
     } else {
-      const previousBottom = previous ? previous.box.y + previous.box.height + 10 : minY;
+      const previousBottom =
+        previous && Math.abs(previous.box.x - paragraph.box.x) < pageWidth * 0.22 ? previous.box.y + previous.box.height + 10 : Math.max(minY, paragraph.box.y - pageHeight * 0.32);
       const captionTop = Math.max(minY, paragraph.box.y - 8);
       y = Math.max(minY, Math.min(previousBottom, captionTop - pageHeight * 0.12));
       height = Math.min(pageHeight * 0.42, Math.max(0, captionTop - y));
@@ -101,9 +298,9 @@ function attachVisualSnapshots(paragraphs: PaperParagraph[], canvas: HTMLCanvasE
     paragraph.imageUrl = cropCanvas(
       canvas,
       {
-        x: marginX,
+        x: columnBox.x,
         y,
-        width: pageWidth - marginX * 2,
+        width: columnBox.width,
         height
       },
       renderScale
@@ -174,56 +371,10 @@ async function extractPdf(file: File): Promise<{ pages: RenderedPage[]; fullText
     await page.render({ canvasContext: context, viewport }).promise;
 
     const content = await page.getTextContent();
-    const rows = content.items
-      .map((item, index) => {
-        const textItem = item as { str: string; transform: number[]; width: number; height: number };
-        const [, , , , x, y] = textItem.transform;
-        const height = textItem.height || 10;
-        return {
-          index,
-          text: textItem.str.trim(),
-          x,
-          y: textViewport.height - y,
-          width: Math.max(textItem.width, 8),
-          height: Math.max(height, 8)
-        };
-      })
-      .filter((item) => item.text)
-      .sort((a, b) => (Math.abs(a.y - b.y) > 4 ? a.y - b.y : a.x - b.x));
-
-    const paragraphs: PaperParagraph[] = [];
-    let current: typeof rows = [];
-
-    const flush = () => {
-      if (!current.length) return;
-      const text = current.map((item) => item.text).join(" ").replace(/\s+/g, " ").trim();
-      if (text.length < 16) {
-        current = [];
-        return;
-      }
-      const left = Math.min(...current.map((item) => item.x));
-      const top = Math.min(...current.map((item) => item.y - item.height));
-      const right = Math.max(...current.map((item) => item.x + item.width));
-      const bottom = Math.max(...current.map((item) => item.y + item.height * 0.25));
-      paragraphs.push({
-        id: `p${pageNumber}-${paragraphs.length}`,
-        pageIndex: pageNumber - 1,
-        text,
-        box: { x: left, y: top, width: right - left, height: bottom - top }
-      });
-      allText.push(text);
-      current = [];
-    };
-
-    rows.forEach((row, index) => {
-      const prev = rows[index - 1];
-      const verticalGap = prev ? Math.abs(row.y - prev.y) : 0;
-      const newParagraph = current.length > 0 && verticalGap > 18;
-      if (newParagraph) flush();
-      current.push(row);
-    });
-    flush();
+    const rows = buildRows(content.items, textViewport.width, textViewport.height);
+    const paragraphs = rowsToParagraphs(rows, pageNumber - 1, textViewport.height);
     attachVisualSnapshots(paragraphs, canvas, textViewport.width, textViewport.height);
+    allText.push(...paragraphs.map((paragraph) => paragraph.text));
 
     pages.push({
       pageIndex: pageNumber - 1,
@@ -498,6 +649,15 @@ export default function Home() {
   }, [translation]);
 
   const paragraphs = useMemo(() => pages.flatMap((page) => page.paragraphs), [pages]);
+  const navigationItems = useMemo(() => {
+    return paragraphs
+      .filter((paragraph) => paragraph.role === "title" || paragraph.role === "heading1" || paragraph.role === "heading2")
+      .map((paragraph) => ({
+        id: paragraph.id,
+        role: paragraph.role,
+        text: translationMap.get(paragraph.id)?.translatedText || paragraph.text
+      }));
+  }, [paragraphs, translationMap]);
 
   async function handleFile(file: File) {
     setStatus("reading");
@@ -617,9 +777,23 @@ export default function Home() {
             <span>原文档截图</span>
             <span>生成 HTML 文档</span>
           </div>
-          <div className="aligned-pages">
-            {pages.map((page) => (
-              <article className="aligned-spread" key={page.pageIndex}>
+          <div className="reader-workspace">
+            <aside className="doc-nav">
+              <strong>导览</strong>
+              {navigationItems.length ? (
+                navigationItems.map((item) => (
+                  <a className={item.role === "heading2" ? "sub" : ""} href={`#translated-${item.id}`} key={item.id}>
+                    {item.text}
+                  </a>
+                ))
+              ) : (
+                <span>正在识别标题...</span>
+              )}
+            </aside>
+
+            <div className="aligned-pages">
+              {pages.map((page) => (
+                <article className="aligned-spread" key={page.pageIndex}>
                 <div className="original-panel">
                   <div className="panel-label">Original · Page {page.pageIndex + 1}</div>
                   <div className="paper-page source-page compact" style={{ aspectRatio: `${page.width} / ${page.height}` }}>
@@ -660,6 +834,24 @@ export default function Home() {
                         </figure>
                       );
                     }
+                    if (paragraph.role === "title" || paragraph.role === "heading1" || paragraph.role === "heading2") {
+                      const HeadingTag = paragraph.role === "title" ? "h1" : paragraph.role === "heading1" ? "h2" : "h3";
+                      return (
+                        <HeadingTag className={`translated-heading ${paragraph.role}`} id={`translated-${paragraph.id}`} key={paragraph.id}>
+                          {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
+                            piece.term ? (
+                              <span className="term" data-tip={piece.term.explanation} key={`${paragraph.id}-${index}`}>
+                                {piece.text}
+                              </span>
+                            ) : piece.mark ? (
+                              <mark key={`${paragraph.id}-${index}`}>{piece.text}</mark>
+                            ) : (
+                              <span key={`${paragraph.id}-${index}`}>{piece.text}</span>
+                            )
+                          )}
+                        </HeadingTag>
+                      );
+                    }
                     return (
                       <p className={`document-paragraph${item ? "" : " pending"}`} key={paragraph.id}>
                         {renderWithTerms(item?.translatedText ?? "等待生成中...", item).map((piece, index) =>
@@ -677,8 +869,9 @@ export default function Home() {
                     );
                   })}
                 </section>
-              </article>
-            ))}
+                </article>
+              ))}
+            </div>
           </div>
         </section>
       )}
