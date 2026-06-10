@@ -18,14 +18,14 @@ export async function POST(request: Request) {
   }
 
   const sql = getSql();
-  const existing = (await sql`SELECT "id" FROM "User" WHERE "email" = ${email} LIMIT 1`) as Array<Record<string, unknown>>;
+  const existing = (await sql`SELECT "id" FROM "APR_User" WHERE "email" = ${email} LIMIT 1`) as Array<Record<string, unknown>>;
   if (existing.length) {
     return NextResponse.json({ error: "这个邮箱已经注册。" }, { status: 409 });
   }
 
   const id = randomBytes(16).toString("hex");
   const rows = (await sql`
-    INSERT INTO "User" ("id", "email", "name", "passwordHash")
+    INSERT INTO "APR_User" ("id", "email", "name", "passwordHash")
     VALUES (${id}, ${email}, ${name}, ${hashPassword(password)})
     RETURNING "id", "email", "name", "createdAt"
   `) as Array<{ id: string; email: string; name: string | null; createdAt: string | Date }>;

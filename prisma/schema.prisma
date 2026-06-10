@@ -15,6 +15,8 @@ model User {
   createdAt    DateTime   @default(now())
   sessions     Session[]
   documents    Document[]
+
+  @@map("APR_User")
 }
 
 model Session {
@@ -27,6 +29,7 @@ model Session {
 
   @@index([token])
   @@index([userId])
+  @@map("APR_Session")
 }
 
 model Document {
@@ -44,4 +47,5 @@ model Document {
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+  @@map("APR_Document")
 }

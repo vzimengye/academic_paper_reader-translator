@@ -10,7 +10,7 @@ export async function GET() {
   const sql = getSql();
   const documents = await sql`
     SELECT "id", "fileName", "title", "sourceLanguage", "targetLanguage", "status", "pageCount", "paragraphCount", "createdAt", "updatedAt"
-    FROM "Document"
+    FROM "APR_Document"
     WHERE "userId" = ${user.id}
     ORDER BY "createdAt" DESC
     LIMIT 50
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
   const id = randomBytes(16).toString("hex");
   const sql = getSql();
   const rows = (await sql`
-    INSERT INTO "Document" ("id", "userId", "fileName", "title", "sourceLanguage", "targetLanguage", "pageCount", "paragraphCount", "status")
+    INSERT INTO "APR_Document" ("id", "userId", "fileName", "title", "sourceLanguage", "targetLanguage", "pageCount", "paragraphCount", "status")
     VALUES (${id}, ${user.id}, ${body.fileName}, ${body.title?.trim() || body.fileName}, ${body.sourceLanguage}, ${body.targetLanguage}, ${body.pageCount ?? 0}, ${body.paragraphCount ?? 0}, ${body.status ?? "completed"})
     RETURNING "id", "fileName", "title", "sourceLanguage", "targetLanguage", "status", "pageCount", "paragraphCount", "createdAt", "updatedAt"
   `) as Array<Record<string, unknown>>;

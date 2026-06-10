@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   }
 
   const sql = getSql();
-  const rows = (await sql`SELECT "id", "email", "name", "passwordHash", "createdAt" FROM "User" WHERE "email" = ${email} LIMIT 1`) as Array<{
+  const rows = (await sql`SELECT "id", "email", "name", "passwordHash", "createdAt" FROM "APR_User" WHERE "email" = ${email} LIMIT 1`) as Array<{
     id: string;
     email: string;
     name: string | null;

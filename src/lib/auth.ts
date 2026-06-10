@@ -24,7 +24,7 @@ export async function createSession(userId: string) {
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
   const id = randomBytes(16).toString("hex");
   const sql = getSql();
-  await sql`INSERT INTO "Session" ("id", "token", "userId", "expiresAt") VALUES (${id}, ${token}, ${userId}, ${expiresAt.toISOString()})`;
+  await sql`INSERT INTO "APR_Session" ("id", "token", "userId", "expiresAt") VALUES (${id}, ${token}, ${userId}, ${expiresAt.toISOString()})`;
 
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {
@@ -41,7 +41,7 @@ export async function destroySession() {
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (token) {
     const sql = getSql();
-    await sql`DELETE FROM "Session" WHERE "token" = ${token}`;
+    await sql`DELETE FROM "APR_Session" WHERE "token" = ${token}`;
   }
   cookieStore.delete(SESSION_COOKIE);
 }
@@ -54,8 +54,8 @@ export async function getCurrentUser() {
   const sql = getSql();
   const rows = (await sql`
     SELECT s."expiresAt", u."id", u."email", u."name", u."createdAt"
-    FROM "Session" s
-    JOIN "User" u ON u."id" = s."userId"
+    FROM "APR_Session" s
+    JOIN "APR_User" u ON u."id" = s."userId"
     WHERE s."token" = ${token}
     LIMIT 1
   `) as Array<Record<string, unknown>>;
@@ -64,7 +64,7 @@ export async function getCurrentUser() {
     | undefined;
 
   if (!session || new Date(session.expiresAt) < new Date()) {
-    if (session) await sql`DELETE FROM "Session" WHERE "token" = ${token}`;
+    if (session) await sql`DELETE FROM "APR_Session" WHERE "token" = ${token}`;
     return null;
   }
 
